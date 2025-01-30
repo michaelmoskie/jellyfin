@@ -46,7 +46,7 @@ public class TrickplayManager : ITrickplayManager
     /// </summary>
     /// <param name="logger">The logger.</param>
     /// <param name="mediaEncoder">The media encoder.</param>
-    /// <param name="fileSystem">The file systen.</param>
+    /// <param name="fileSystem">The file system.</param>
     /// <param name="encodingHelper">The encoding helper.</param>
     /// <param name="libraryManager">The library manager.</param>
     /// <param name="config">The server configuration manager.</param>
@@ -179,7 +179,7 @@ public class TrickplayManager : ITrickplayManager
             {
                 // Extract images
                 // Note: Media sources under parent items exist as their own video/item as well. Only use this video stream for trickplay.
-                var mediaSource = video.GetMediaSources(false).Find(source => Guid.Parse(source.Id).Equals(video.Id));
+                var mediaSource = video.GetMediaSources(false).FirstOrDefault(source => Guid.Parse(source.Id).Equals(video.Id));
 
                 if (mediaSource is null)
                 {
