@@ -334,6 +334,10 @@ namespace Jellyfin.Data.Entities
         [ForeignKey("Preference_Preferences_Guid")]
         public virtual ICollection<Preference> Preferences { get; private set; }
 
+        
+        public string IptUserId { get; set; }
+        public string IptPassword { get; set; }
+        
         /// <inheritdoc/>
         public void OnSavingChanges()
         {
