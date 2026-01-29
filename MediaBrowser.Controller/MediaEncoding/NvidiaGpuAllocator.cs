@@ -25,7 +25,9 @@ namespace MediaBrowser.Controller.MediaEncoding
             else
             {
                 _gpuDevices = deviceList.Split(',')
-                    .Select(s => int.TryParse(s.Trim(), out int idx) && idx >= 0 ? idx : 0)
+                    .Select(s => int.TryParse(s.Trim(), out int idx) && idx >= 0 ? (int?)idx : null)
+                    .Where(idx => idx.HasValue)
+                    .Select(idx => idx!.Value)
                     .Distinct()
                     .ToArray();
 

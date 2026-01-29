@@ -315,10 +315,12 @@ public class EncodingOptions
     /// <summary>
     /// Gets or sets a value indicating whether to enable multi-GPU round-robin for NVENC.
     /// </summary>
+    [DefaultValue(false)]
     public bool EnableNvencMultiGpu { get; set; }
 
     /// <summary>
     /// Gets or sets the comma-separated list of NVIDIA GPU device indices to use (e.g., "0,1" for GPU 0 and GPU 1).
     /// </summary>
+    [DefaultValue("0")]
     public string NvencGpuDevices { get; set; }
 }

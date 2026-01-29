@@ -90,9 +90,21 @@ namespace Jellyfin.Controller.Tests
         [Fact]
         public void Constructor_WithMixedValidAndInvalid_UsesValidOnly()
         {
-            var allocator = new NvidiaGpuAllocator("0,invalid,1,-1");
+            var allocator = new NvidiaGpuAllocator("1,invalid,2,-1");
 
             Assert.Equal(2, allocator.GpuCount);
+            Assert.Equal(1, allocator.GetNextGpu());
+            Assert.Equal(2, allocator.GetNextGpu());
+            Assert.Equal(1, allocator.GetNextGpu());
+        }
+
+        [Fact]
+        public void Constructor_WithAllInvalidDevices_UsesDefault()
+        {
+            var allocator = new NvidiaGpuAllocator("invalid,invalid2,-1,-2");
+
+            Assert.Equal(1, allocator.GpuCount);
+            Assert.Equal(0, allocator.GetNextGpu());
         }
 
         [Fact]
