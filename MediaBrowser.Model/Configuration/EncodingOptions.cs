@@ -62,6 +62,8 @@ public class EncodingOptions
         AllowOnDemandMetadataBasedKeyframeExtractionForExtensions = ["mkv"];
         HardwareDecodingCodecs = ["h264", "vc1"];
         HlsAudioSeekStrategy = HlsAudioSeekStrategy.DisableAccurateSeek;
+        EnableNvencMultiGpu = false;
+        NvencGpuDevices = "0";
     }
 
     /// <summary>
@@ -309,4 +311,14 @@ public class EncodingOptions
     /// </summary>
     [DefaultValue(HlsAudioSeekStrategy.DisableAccurateSeek)]
     public HlsAudioSeekStrategy HlsAudioSeekStrategy { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether to enable multi-GPU round-robin for NVENC.
+    /// </summary>
+    public bool EnableNvencMultiGpu { get; set; }
+
+    /// <summary>
+    /// Gets or sets the comma-separated list of NVIDIA GPU device indices to use (e.g., "0,1" for GPU 0 and GPU 1).
+    /// </summary>
+    public string NvencGpuDevices { get; set; }
 }

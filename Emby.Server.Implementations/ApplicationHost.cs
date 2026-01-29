@@ -516,6 +516,15 @@ namespace Emby.Server.Implementations
             serviceCollection.AddSingleton<IItemTypeLookup, ItemTypeLookup>();
 
             serviceCollection.AddSingleton<IMediaEncoder, MediaBrowser.MediaEncoding.Encoder.MediaEncoder>();
+
+            // Register NVIDIA GPU allocator as singleton
+            serviceCollection.AddSingleton(serviceProvider =>
+            {
+                var config = serviceProvider.GetRequiredService<IConfigurationManager>();
+                var encodingOptions = config.GetEncodingOptions();
+                return new NvidiaGpuAllocator(encodingOptions.NvencGpuDevices ?? "0");
+            });
+
             serviceCollection.AddSingleton<EncodingHelper>();
             serviceCollection.AddSingleton<IPathManager, PathManager>();
             serviceCollection.AddSingleton<IExternalDataManager, ExternalDataManager>();
