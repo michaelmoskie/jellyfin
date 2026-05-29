@@ -63,6 +63,7 @@ namespace MediaBrowser.Controller.MediaEncoding
         private readonly IConfiguration _config;
         private readonly IConfigurationManager _configurationManager;
         private readonly IPathManager _pathManager;
+        private readonly NvidiaGpuAllocator _nvidiaGpuAllocator;
 
         // i915 hang was fixed by linux 6.2 (3f882f2)
         private readonly Version _minKerneli915Hang = new Version(5, 18);
@@ -162,7 +163,8 @@ namespace MediaBrowser.Controller.MediaEncoding
             ISubtitleEncoder subtitleEncoder,
             IConfiguration config,
             IConfigurationManager configurationManager,
-            IPathManager pathManager)
+            IPathManager pathManager,
+            NvidiaGpuAllocator nvidiaGpuAllocator)
         {
             _appPaths = appPaths;
             _mediaEncoder = mediaEncoder;
@@ -170,6 +172,7 @@ namespace MediaBrowser.Controller.MediaEncoding
             _config = config;
             _configurationManager = configurationManager;
             _pathManager = pathManager;
+            _nvidiaGpuAllocator = nvidiaGpuAllocator;
         }
 
         private enum DynamicHdrMetadataRemovalPlan
@@ -1145,7 +1148,10 @@ namespace MediaBrowser.Controller.MediaEncoding
                     return string.Empty;
                 }
 
-                args.Append(GetCudaDeviceArgs(0, CudaAlias))
+                var gpuIndex = options.EnableNvencMultiGpu
+                    ? _nvidiaGpuAllocator.GetNextGpu()
+                    : 0;
+                args.Append(GetCudaDeviceArgs(gpuIndex, CudaAlias))
                      .Append(GetFilterHwDeviceArgs(CudaAlias));
             }
             else if (optHwaccelType == HardwareAccelerationType.amf)
