@@ -43,6 +43,7 @@ public class EncodingOptions
         VppTonemappingContrast = 1;
         H264Crf = 23;
         H265Crf = 28;
+        EncoderPreset = EncoderPreset.auto;
         DeinterlaceDoubleRate = false;
         DeinterlaceMethod = DeinterlaceMethod.yadif;
         EnableDecodingColorDepth10Hevc = true;
@@ -60,8 +61,8 @@ public class EncodingOptions
         EnableSubtitleExtraction = true;
         SubtitleExtractionTimeoutMinutes = 30;
         AllowOnDemandMetadataBasedKeyframeExtractionForExtensions = ["mkv"];
-        HardwareDecodingCodecs = ["h264", "vc1"];
-        HlsAudioSeekStrategy = HlsAudioSeekStrategy.DisableAccurateSeek;
+        HardwareDecodingCodecs = ["h264", "vc1", "mpeg2video"];
+        HlsAudioSeekStrategy = HlsAudioSeekStrategy.TrimCopiedAudio;
     }
 
     /// <summary>
@@ -217,7 +218,7 @@ public class EncodingOptions
     /// <summary>
     /// Gets or sets the encoder preset.
     /// </summary>
-    public EncoderPreset? EncoderPreset { get; set; }
+    public EncoderPreset EncoderPreset { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether the framerate is doubled when deinterlacing.
@@ -307,6 +308,6 @@ public class EncodingOptions
     /// <summary>
     /// Gets or sets the method used for audio seeking in HLS.
     /// </summary>
-    [DefaultValue(HlsAudioSeekStrategy.DisableAccurateSeek)]
+    [DefaultValue(HlsAudioSeekStrategy.TrimCopiedAudio)]
     public HlsAudioSeekStrategy HlsAudioSeekStrategy { get; set; }
 }

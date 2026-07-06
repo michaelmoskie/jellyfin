@@ -26,6 +26,7 @@ using Emby.Server.Implementations.Dto;
 using Emby.Server.Implementations.HttpServer.Security;
 using Emby.Server.Implementations.IO;
 using Emby.Server.Implementations.Library;
+using Emby.Server.Implementations.Library.Search;
 using Emby.Server.Implementations.Library.SimilarItems;
 using Emby.Server.Implementations.Localization;
 using Emby.Server.Implementations.Playlists;
@@ -92,6 +93,9 @@ using MediaBrowser.Model.Net;
 using MediaBrowser.Model.Serialization;
 using MediaBrowser.Model.System;
 using MediaBrowser.Model.Tasks;
+using MediaBrowser.Providers.Books;
+using MediaBrowser.Providers.Books.ComicBookInfo;
+using MediaBrowser.Providers.Books.ComicInfo;
 using MediaBrowser.Providers.Lyric;
 using MediaBrowser.Providers.Manager;
 using MediaBrowser.Providers.Plugins.ListenBrainz;
@@ -495,6 +499,14 @@ namespace Emby.Server.Implementations
             serviceCollection.AddSingleton<ListenBrainzLabsClient>();
             serviceCollection.AddSingleton<ListenBrainzSimilarArtistProvider>();
 
+            // register the generic local metadata provider for comic files
+            serviceCollection.AddSingleton<ComicProvider>();
+
+            // register the actual implementations of the local metadata provider for comic files
+            serviceCollection.AddSingleton<IComicProvider, ComicBookInfoProvider>();
+            serviceCollection.AddSingleton<IComicProvider, ExternalComicInfoProvider>();
+            serviceCollection.AddSingleton<IComicProvider, InternalComicInfoProvider>();
+
             serviceCollection.AddSingleton(NetManager);
 
             serviceCollection.AddSingleton<ITaskManager, TaskManager>();
@@ -539,6 +551,7 @@ namespace Emby.Server.Implementations
             serviceCollection.AddTransient(provider => new Lazy<ILibraryMonitor>(provider.GetRequiredService<ILibraryMonitor>));
             serviceCollection.AddTransient(provider => new Lazy<IProviderManager>(provider.GetRequiredService<IProviderManager>));
             serviceCollection.AddTransient(provider => new Lazy<IUserViewManager>(provider.GetRequiredService<IUserViewManager>));
+            serviceCollection.AddTransient(provider => new Lazy<IExternalDataManager>(provider.GetRequiredService<IExternalDataManager>));
             serviceCollection.AddSingleton<ILibraryManager, LibraryManager>();
             serviceCollection.AddSingleton<NamingOptions>();
             serviceCollection.AddSingleton<VideoListResolver>();
@@ -550,7 +563,8 @@ namespace Emby.Server.Implementations
 
             serviceCollection.AddSingleton<ISimilarItemsManager, SimilarItemsManager>();
 
-            serviceCollection.AddSingleton<ISearchEngine, SearchEngine>();
+            serviceCollection.AddSingleton<ISearchManager, SearchManager>();
+            serviceCollection.AddSingleton<ISearchProvider, SqlSearchProvider>();
 
             serviceCollection.AddSingleton<IWebSocketManager, WebSocketManager>();
 
@@ -709,6 +723,7 @@ namespace Emby.Server.Implementations
             Resolve<IMediaSourceManager>().AddParts(GetExports<IMediaSourceProvider>());
 
             Resolve<ISimilarItemsManager>().AddParts(GetExports<ISimilarItemsProvider>());
+            Resolve<ISearchManager>().AddParts(GetExports<ISearchProvider>());
         }
 
         /// <summary>

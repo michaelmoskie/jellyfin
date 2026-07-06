@@ -104,7 +104,7 @@ namespace MediaBrowser.Controller.MediaEncoding
 
         public bool GenPtsInput => MediaSource.GenPtsInput;
 
-        public bool DiscardCorruptFramesInput => false;
+        public bool DiscardCorruptFramesInput => MediaSource?.IsInfiniteStream == true;
 
         public bool EnableFastSeekInput => false;
 
@@ -514,6 +514,15 @@ namespace MediaBrowser.Controller.MediaEncoding
         public bool EnableAudioVbrEncoding => BaseRequest.EnableAudioVbrEncoding;
 
         public int HlsListSize => 0;
+
+        /// <summary>
+        /// Adds the specified reason(s) to <see cref="TranscodeReasons"/>.
+        /// </summary>
+        /// <param name="reason">The transcode reason(s) to add.</param>
+        public void AddTranscodeReason(TranscodeReason reason)
+        {
+            _transcodeReasons = TranscodeReasons | reason;
+        }
 
         private int? GetMediaStreamCount(MediaStreamType type, int limit)
         {

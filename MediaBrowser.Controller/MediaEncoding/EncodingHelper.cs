@@ -25,6 +25,7 @@ using MediaBrowser.Model.Dlna;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.MediaInfo;
+using MediaBrowser.Model.Session;
 using Microsoft.Extensions.Configuration;
 using IConfigurationManager = MediaBrowser.Common.Configuration.IConfigurationManager;
 
@@ -86,6 +87,7 @@ namespace MediaBrowser.Controller.MediaEncoding
         private readonly Version _minFFmpegQsvVppScaleModeOption = new Version(6, 0);
         private readonly Version _minFFmpegRkmppHevcDecDoviRpu = new Version(7, 1, 1);
         private readonly Version _minFFmpegReadrateCatchupOption = new Version(8, 0);
+        private readonly Version _minFFmpegNoiseBsfDrop = new Version(5, 0);
 
         private static readonly string[] _videoProfilesH264 =
         [
@@ -441,6 +443,13 @@ namespace MediaBrowser.Controller.MediaEncoding
                        || IsHdr10Plus(state.VideoStream)
                        || IsDoviWithHdr10Bl(state.VideoStream)
                        || state.VideoStream.VideoRangeType == VideoRangeType.HLG);
+        }
+
+        private static bool IsDeinterlaceAvailable(EncodingJobInfo state)
+        {
+            var doDeintH264 = state.DeInterlace("h264", true) || state.DeInterlace("avc", true);
+            var doDeintHevc = state.DeInterlace("h265", true) || state.DeInterlace("hevc", true);
+            return doDeintH264 || doDeintHevc;
         }
 
         private bool IsVideoStreamHevcRext(EncodingJobInfo state)
@@ -1547,20 +1556,61 @@ namespace MediaBrowser.Controller.MediaEncoding
 
         public string GetAudioBitStreamArguments(EncodingJobInfo state, string segmentContainer, string mediaSourceContainer)
         {
-            var bitStreamArgs = string.Empty;
+            var filters = new List<string>();
+
+            var noiseFilter = GetCopiedAudioTrimBsf(state);
+            if (!string.IsNullOrEmpty(noiseFilter))
+            {
+                filters.Add(noiseFilter);
+            }
+
             var segmentFormat = GetSegmentFileExtension(segmentContainer).TrimStart('.');
 
             // Apply aac_adtstoasc bitstream filter when media source is in mpegts.
             if (string.Equals(segmentFormat, "mp4", StringComparison.OrdinalIgnoreCase)
                 && (string.Equals(mediaSourceContainer, "ts", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(mediaSourceContainer, "aac", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(mediaSourceContainer, "hls", StringComparison.OrdinalIgnoreCase)))
+                    || string.Equals(mediaSourceContainer, "hls", StringComparison.OrdinalIgnoreCase))
+                && IsAAC(state.AudioStream))
             {
-                bitStreamArgs = GetBitStreamArgs(state, MediaStreamType.Audio);
-                bitStreamArgs = string.IsNullOrEmpty(bitStreamArgs) ? string.Empty : " " + bitStreamArgs;
+                filters.Add("aac_adtstoasc");
             }
 
-            return bitStreamArgs;
+            return filters.Count == 0
+                ? string.Empty
+                : " -bsf:a " + string.Join(',', filters);
+        }
+
+        // When video is transcoded, accurate_seek (the default) trims video to the
+        // exact seek point via decoder-side frame discard. But stream-copied audio
+        // bypasses the decoder, so it starts from the nearest keyframe — potentially
+        // seconds before the target. Use the noise bsf to drop copied audio packets
+        // before the seek target, achieving the same trim precision without
+        // re-encoding. The noise bsf's drop= parameter requires ffmpeg >= 5.0.
+        // Important: make sure not to use it with wtv because it breaks seeking
+        private string GetCopiedAudioTrimBsf(EncodingJobInfo state)
+        {
+            if (state.TranscodingType is not TranscodingJobType.Hls
+                || !state.IsVideoRequest
+                || IsCopyCodec(state.OutputVideoCodec)
+                || !IsCopyCodec(state.OutputAudioCodec)
+                || string.Equals(state.InputContainer, "wtv", StringComparison.OrdinalIgnoreCase)
+                || _mediaEncoder.EncoderVersion < _minFFmpegNoiseBsfDrop)
+            {
+                return null;
+            }
+
+            var startTicks = state.BaseRequest.StartTimeTicks ?? 0;
+            if (startTicks <= 0)
+            {
+                return null;
+            }
+
+            var seekSeconds = startTicks / (double)TimeSpan.TicksPerSecond;
+            return string.Format(
+                CultureInfo.InvariantCulture,
+                "noise=drop='lt(pts*tb\\,{0:F3})'",
+                seekSeconds);
         }
 
         public static string GetSegmentFileExtension(string segmentContainer)
@@ -1763,13 +1813,13 @@ namespace MediaBrowser.Controller.MediaEncoding
             {
                 param += encoderPreset switch
                 {
-                        EncoderPreset.veryslow => " -preset p7",
-                        EncoderPreset.slower => " -preset p6",
-                        EncoderPreset.slow => " -preset p5",
-                        EncoderPreset.medium => " -preset p4",
-                        EncoderPreset.fast => " -preset p3",
-                        EncoderPreset.faster => " -preset p2",
-                        _ => " -preset p1"
+                    EncoderPreset.veryslow => " -preset p7",
+                    EncoderPreset.slower => " -preset p6",
+                    EncoderPreset.slow => " -preset p5",
+                    EncoderPreset.medium => " -preset p4",
+                    EncoderPreset.fast => " -preset p3",
+                    EncoderPreset.faster => " -preset p2",
+                    _ => " -preset p1"
                 };
             }
             else if (string.Equals(videoEncoder, "h264_amf", StringComparison.OrdinalIgnoreCase) // h264 (h264_amf)
@@ -1779,11 +1829,11 @@ namespace MediaBrowser.Controller.MediaEncoding
             {
                 param += encoderPreset switch
                 {
-                        EncoderPreset.veryslow => " -quality quality",
-                        EncoderPreset.slower => " -quality quality",
-                        EncoderPreset.slow => " -quality quality",
-                        EncoderPreset.medium => " -quality balanced",
-                        _ => " -quality speed"
+                    EncoderPreset.veryslow => " -quality quality",
+                    EncoderPreset.slower => " -quality quality",
+                    EncoderPreset.slow => " -quality quality",
+                    EncoderPreset.medium => " -quality balanced",
+                    _ => " -quality speed"
                 };
 
                 if (string.Equals(videoEncoder, "hevc_amf", StringComparison.OrdinalIgnoreCase)
@@ -1803,11 +1853,11 @@ namespace MediaBrowser.Controller.MediaEncoding
             {
                 param += encoderPreset switch
                 {
-                        EncoderPreset.veryslow => " -prio_speed 0",
-                        EncoderPreset.slower => " -prio_speed 0",
-                        EncoderPreset.slow => " -prio_speed 0",
-                        EncoderPreset.medium => " -prio_speed 0",
-                        _ => " -prio_speed 1"
+                    EncoderPreset.veryslow => " -prio_speed 0",
+                    EncoderPreset.slower => " -prio_speed 0",
+                    EncoderPreset.slow => " -prio_speed 0",
+                    EncoderPreset.medium => " -prio_speed 0",
+                    _ => " -prio_speed 1"
                 };
             }
 
@@ -1854,6 +1904,158 @@ namespace MediaBrowser.Controller.MediaEncoding
             }
 
             return level;
+        }
+
+        /// <summary>
+        /// Returns the minimum H.264 level (e.g. 30 for 3.0) required for the given resolution and frame rate.
+        /// </summary>
+        /// <param name="width">Output width in pixels.</param>
+        /// <param name="height">Output height in pixels.</param>
+        /// <param name="frameRate">Output frame rate.</param>
+        /// <returns>The minimum H.264 level as an integer (level * 10).</returns>
+        public static int GetMinimumH264Level(int width, int height, double frameRate)
+        {
+            var macroBlocksPerFrame = ((width + 15) / 16) * ((height + 15) / 16);
+            var macroBlockRate = (int)Math.Ceiling(macroBlocksPerFrame * frameRate);
+
+            ReadOnlySpan<(int Level, int MaxMacroBlockRate)> h264Levels =
+            [
+                (10, 1485), (11, 3000), (12, 6000), (13, 11880),
+                (20, 11880), (21, 19800), (22, 20250),
+                (30, 40500), (31, 108000), (32, 216000),
+                (40, 245760), (41, 245760), (42, 522240),
+                (50, 589824), (51, 983040), (52, 2073600),
+            ];
+
+            foreach (var (level, maxRate) in h264Levels)
+            {
+                if (macroBlockRate <= maxRate)
+                {
+                    return level;
+                }
+            }
+
+            return 52;
+        }
+
+        /// <summary>
+        /// Estimates the output frame rate after transcoding filters (e.g. double-rate deinterlace).
+        /// </summary>
+        /// <param name="state">The encoding job info.</param>
+        /// <param name="options">The encoding options.</param>
+        /// <returns>The estimated output frame rate, or null if unknown.</returns>
+        public static double? GetTranscodeOutputFrameRate(EncodingJobInfo state, EncodingOptions options)
+        {
+            var videoStream = state.VideoStream;
+            if (videoStream is null)
+            {
+                return null;
+            }
+
+            if (state.DeInterlace(state.ActualOutputVideoCodec, true))
+            {
+                var fieldRate = videoStream.ReferenceFrameRate ?? videoStream.AverageFrameRate;
+                if (fieldRate.HasValue && fieldRate.Value > 0)
+                {
+                    var doubleRate = options.DeinterlaceDoubleRate && fieldRate.Value <= 30;
+                    return doubleRate ? fieldRate.Value * 2 : fieldRate.Value;
+                }
+            }
+
+            if (state.BaseRequest.Framerate.HasValue)
+            {
+                return state.BaseRequest.Framerate.Value;
+            }
+
+            return videoStream.AverageFrameRate ?? videoStream.RealFrameRate;
+        }
+
+        /// <summary>
+        /// Raises the requested H.264 level when deinterlacing or scaling would exceed its macroblock rate limit.
+        /// </summary>
+        /// <param name="state">The encoding job info.</param>
+        /// <param name="options">The encoding options.</param>
+        /// <param name="level">The requested H.264 level string.</param>
+        /// <returns>The adjusted level string.</returns>
+        public static string AdjustH264TranscodingLevelForOutput(
+            EncodingJobInfo state,
+            EncodingOptions options,
+            string level)
+        {
+            if (string.IsNullOrEmpty(level)
+                || IsCopyCodec(state.OutputVideoCodec)
+                || !string.Equals(state.ActualOutputVideoCodec, "h264", StringComparison.OrdinalIgnoreCase))
+            {
+                return level;
+            }
+
+            if (!int.TryParse(level, NumberStyles.Integer, CultureInfo.InvariantCulture, out var requestLevel))
+            {
+                return level;
+            }
+
+            var outputFrameRate = GetTranscodeOutputFrameRate(state, options);
+            if (!outputFrameRate.HasValue || outputFrameRate.Value <= 0)
+            {
+                return level;
+            }
+
+            var (outputWidth, outputHeight) = GetFixedOutputSize(
+                state.VideoStream?.Width,
+                state.VideoStream?.Height,
+                state.BaseRequest.Width,
+                state.BaseRequest.Height,
+                state.BaseRequest.MaxWidth,
+                state.BaseRequest.MaxHeight);
+
+            if (!outputWidth.HasValue || !outputHeight.HasValue)
+            {
+                return level;
+            }
+
+            var minimumLevel = GetMinimumH264Level(outputWidth.Value, outputHeight.Value, outputFrameRate.Value);
+            if (minimumLevel <= requestLevel)
+            {
+                return level;
+            }
+
+            return minimumLevel.ToString(CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// Live broadcast bitmap subtitle burn-in uses -copyts; -start_at_zero breaks segment timing.
+        /// External graphical subs already skip -start_at_zero for the same reason.
+        /// </summary>
+        /// <param name="state">The encoding job info.</param>
+        /// <returns><c>true</c> when -start_at_zero should not be used.</returns>
+        public static bool ShouldDisableStartAtZeroForSubtitleTranscode(EncodingJobInfo state)
+        {
+            if (state.SubtitleStream is null || state.SubtitleStream.IsTextSubtitleStream)
+            {
+                return false;
+            }
+
+            if (state.SubtitleStream.IsExternal)
+            {
+                return true;
+            }
+
+            return state.MediaSource?.IsInfiniteStream == true;
+        }
+
+        /// <summary>
+        /// Gets the HLS video -start_at_zero argument for subtitle burn-in transcodes.
+        /// </summary>
+        /// <param name="state">The encoding job info.</param>
+        /// <returns>The ffmpeg argument or an empty string.</returns>
+        public static string GetHlsSubtitleStartAtZeroArg(EncodingJobInfo state)
+        {
+            if (state.SubtitleStream is null || ShouldDisableStartAtZeroForSubtitleTranscode(state))
+            {
+                return string.Empty;
+            }
+
+            return " -start_at_zero";
         }
 
         /// <summary>
@@ -2014,11 +2216,15 @@ namespace MediaBrowser.Controller.MediaEncoding
                 args += keyFrameArg + gopArg;
             }
 
-            // global_header produced by AMD HEVC VA-API encoder causes non-playable fMP4 on iOS
+            // The in-band Parameter Sets generated by the AMD HEVC VA-API encoder is inconsistent
+            // with the extradata generated by ffmpeg, causing decoding failures when using hvc1.
             if (string.Equals(codec, "hevc_vaapi", StringComparison.OrdinalIgnoreCase)
                 && _mediaEncoder.IsVaapiDeviceAmd)
             {
-                args += " -flags:v -global_header";
+                // Extracting the extradata from the in-band PS to bypass the issue.
+                // This can be removed once the issue is resolved in libva or Mesa.
+                // Transcoding is unavoidable here, so using BSF will not conflict with BSF in remuxing.
+                args += " -flags:v -global_header -bsf:v extract_extradata=remove=0";
             }
 
             return args;
@@ -2242,6 +2448,7 @@ namespace MediaBrowser.Controller.MediaEncoding
             }
 
             var level = NormalizeTranscodingLevel(state, state.GetRequestedLevel(targetVideoCodec));
+            level = AdjustH264TranscodingLevelForOutput(state, encodingOptions, level);
 
             if (!string.IsNullOrEmpty(level))
             {
@@ -2558,56 +2765,66 @@ namespace MediaBrowser.Controller.MediaEncoding
         }
 
         public bool CanStreamCopyAudio(EncodingJobInfo state, MediaStream audioStream, IEnumerable<string> supportedAudioCodecs)
+            => CanStreamCopyAudio(state, audioStream, supportedAudioCodecs, out _);
+
+        /// <summary>
+        /// Determines whether the given audio stream can be stream-copied and, regardless of the outcome,
+        /// reports the codec/parameter incompatibilities that would force a re-encode via <paramref name="failureReasons"/>.
+        /// </summary>
+        /// <param name="state">The encoding job state.</param>
+        /// <param name="audioStream">The source audio stream.</param>
+        /// <param name="supportedAudioCodecs">The audio codecs the target supports.</param>
+        /// <param name="failureReasons">The codec/parameter incompatibilities preventing a copy, or <c>0</c> if the stream is copy-compatible.</param>
+        /// <returns><c>true</c> if the audio stream can be stream-copied; otherwise, <c>false</c>.</returns>
+        public bool CanStreamCopyAudio(EncodingJobInfo state, MediaStream audioStream, IEnumerable<string> supportedAudioCodecs, out TranscodeReason failureReasons)
         {
             var request = state.BaseRequest;
 
-            if (!request.AllowAudioStreamCopy)
-            {
-                return false;
-            }
+            // Policy-independent compatibility check, so the reasons are reported even when a policy gate is what ultimately prevents the copy.
+            failureReasons = GetAudioStreamCopyFailureReasons(state, audioStream, supportedAudioCodecs);
+
+            return request.AllowAudioStreamCopy
+                && request.EnableAutoStreamCopy
+                && failureReasons == 0;
+        }
+
+        private static TranscodeReason GetAudioStreamCopyFailureReasons(EncodingJobInfo state, MediaStream audioStream, IEnumerable<string> supportedAudioCodecs)
+        {
+            var request = state.BaseRequest;
+            TranscodeReason reasons = 0;
 
             var maxBitDepth = state.GetRequestedAudioBitDepth(audioStream.Codec);
             if (maxBitDepth.HasValue
                 && audioStream.BitDepth.HasValue
                 && audioStream.BitDepth.Value > maxBitDepth.Value)
             {
-                return false;
+                reasons |= TranscodeReason.AudioBitDepthNotSupported;
             }
 
             // Source and target codecs must match
             if (string.IsNullOrEmpty(audioStream.Codec)
                 || !supportedAudioCodecs.Contains(audioStream.Codec, StringComparison.OrdinalIgnoreCase))
             {
-                return false;
+                reasons |= TranscodeReason.AudioCodecNotSupported;
             }
 
             // Channels must fall within requested value
             var channels = state.GetRequestedAudioChannels(audioStream.Codec);
-            if (channels.HasValue)
+            if (channels.HasValue
+                && (!audioStream.Channels.HasValue
+                    || audioStream.Channels.Value <= 0
+                    || audioStream.Channels.Value > channels.Value))
             {
-                if (!audioStream.Channels.HasValue || audioStream.Channels.Value <= 0)
-                {
-                    return false;
-                }
-
-                if (audioStream.Channels.Value > channels.Value)
-                {
-                    return false;
-                }
+                reasons |= TranscodeReason.AudioChannelsNotSupported;
             }
 
             // Sample rate must fall within requested value
-            if (request.AudioSampleRate.HasValue)
+            if (request.AudioSampleRate.HasValue
+                && (!audioStream.SampleRate.HasValue
+                    || audioStream.SampleRate.Value <= 0
+                    || audioStream.SampleRate.Value > request.AudioSampleRate.Value))
             {
-                if (!audioStream.SampleRate.HasValue || audioStream.SampleRate.Value <= 0)
-                {
-                    return false;
-                }
-
-                if (audioStream.SampleRate.Value > request.AudioSampleRate.Value)
-                {
-                    return false;
-                }
+                reasons |= TranscodeReason.AudioSampleRateNotSupported;
             }
 
             // Audio bitrate must fall within requested value
@@ -2615,10 +2832,10 @@ namespace MediaBrowser.Controller.MediaEncoding
                 && audioStream.BitRate.HasValue
                 && audioStream.BitRate.Value > request.AudioBitRate.Value)
             {
-                return false;
+                reasons |= TranscodeReason.AudioBitrateNotSupported;
             }
 
-            return request.EnableAutoStreamCopy;
+            return reasons;
         }
 
         public int GetVideoBitrateParamValue(BaseEncodingJobOptions request, MediaStream videoStream, string outputVideoCodec)
@@ -2759,25 +2976,29 @@ namespace MediaBrowser.Controller.MediaEncoding
                 || string.Equals(audioCodec, "ac3", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(audioCodec, "eac3", StringComparison.OrdinalIgnoreCase))
             {
+#pragma warning disable SA1008
                 return (inputChannels, outputChannels) switch
                 {
-                    (>= 6, >= 6 or 0) => Math.Min(640000, bitrate),
-                    (> 0, > 0) => Math.Min(outputChannels * 128000, bitrate),
-                    (> 0, _) => Math.Min(inputChannels * 128000, bitrate),
+                    ( >= 6, >= 6 or 0) => Math.Min(640000, bitrate),
+                    ( > 0, > 0) => Math.Min(outputChannels * 128000, bitrate),
+                    ( > 0, _) => Math.Min(inputChannels * 128000, bitrate),
                     (_, _) => Math.Min(384000, bitrate)
                 };
+#pragma warning restore SA1008
             }
 
             if (string.Equals(audioCodec, "dts", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(audioCodec, "dca", StringComparison.OrdinalIgnoreCase))
             {
+#pragma warning disable SA1008
                 return (inputChannels, outputChannels) switch
                 {
-                    (>= 6, >= 6 or 0) => Math.Min(768000, bitrate),
-                    (> 0, > 0) => Math.Min(outputChannels * 136000, bitrate),
-                    (> 0, _) => Math.Min(inputChannels * 136000, bitrate),
+                    ( >= 6, >= 6 or 0) => Math.Min(768000, bitrate),
+                    ( > 0, > 0) => Math.Min(outputChannels * 136000, bitrate),
+                    ( > 0, _) => Math.Min(inputChannels * 136000, bitrate),
                     (_, _) => Math.Min(672000, bitrate)
                 };
+#pragma warning restore SA1008
             }
 
             // Empty bitrate area is not allow on iOS
@@ -2998,23 +3219,6 @@ namespace MediaBrowser.Controller.MediaEncoding
                 }
 
                 seekParam += string.Format(CultureInfo.InvariantCulture, "-ss {0}", _mediaEncoder.GetTimeParameter(seekTick));
-
-                if (state.IsVideoRequest)
-                {
-                    // If we are remuxing, then the copied stream cannot be seeked accurately (it will seek to the nearest
-                    // keyframe). If we are using fMP4, then force all other streams to use the same inaccurate seeking to
-                    // avoid A/V sync issues which cause playback issues on some devices.
-                    // When remuxing video, the segment start times correspond to key frames in the source stream, so this
-                    // option shouldn't change the seeked point that much.
-                    // Important: make sure not to use it with wtv because it breaks seeking
-                    if (state.TranscodingType is TranscodingJobType.Hls
-                        && string.Equals(segmentContainer, "mp4", StringComparison.OrdinalIgnoreCase)
-                        && (IsCopyCodec(state.OutputVideoCodec) || IsCopyCodec(state.OutputAudioCodec))
-                        && !string.Equals(state.InputContainer, "wtv", StringComparison.OrdinalIgnoreCase))
-                    {
-                        seekParam += " -noaccurate_seek";
-                    }
-                }
             }
 
             return seekParam;
@@ -3038,12 +3242,22 @@ namespace MediaBrowser.Controller.MediaEncoding
             // We have media info, but we don't know the stream index
             if (state.VideoStream is not null && state.VideoStream.Index == -1)
             {
+                if (state.MediaSource?.IsInfiniteStream == true)
+                {
+                    return GetLiveStreamMapArgs(state);
+                }
+
                 return "-sn";
             }
 
             // We have media info, but we don't know the stream index
             if (state.AudioStream is not null && state.AudioStream.Index == -1)
             {
+                if (state.MediaSource?.IsInfiniteStream == true)
+                {
+                    return GetLiveStreamMapArgs(state);
+                }
+
                 return state.IsInputVideo ? "-sn" : string.Empty;
             }
 
@@ -3051,7 +3265,7 @@ namespace MediaBrowser.Controller.MediaEncoding
 
             if (state.VideoStream is not null)
             {
-                int videoStreamIndex = FindIndex(state.MediaSource.MediaStreams, state.VideoStream);
+                int videoStreamIndex = GetStreamMapIndex(state.MediaSource.MediaStreams, state.VideoStream);
 
                 args += string.Format(
                     CultureInfo.InvariantCulture,
@@ -3066,7 +3280,7 @@ namespace MediaBrowser.Controller.MediaEncoding
 
             if (state.AudioStream is not null)
             {
-                int audioStreamIndex = FindIndex(state.MediaSource.MediaStreams, state.AudioStream);
+                int audioStreamIndex = GetStreamMapIndex(state.MediaSource.MediaStreams, state.AudioStream);
                 if (state.AudioStream.IsExternal)
                 {
                     bool hasExternalSubAsInput = NeedsExternalSubtitleMuxing(state);
@@ -3116,7 +3330,7 @@ namespace MediaBrowser.Controller.MediaEncoding
                 }
                 else
                 {
-                    int subtitleStreamIndex = FindIndex(state.MediaSource.MediaStreams, state.SubtitleStream);
+                    int subtitleStreamIndex = GetStreamMapIndex(state.MediaSource.MediaStreams, state.SubtitleStream);
 
                     args += string.Format(
                         CultureInfo.InvariantCulture,
@@ -3150,7 +3364,7 @@ namespace MediaBrowser.Controller.MediaEncoding
             // http://ffmpeg.org/ffmpeg-all.html#toc-Complex-filtergraphs-1
             if (state.VideoStream is not null && videoProcessFilters.Contains("-filter_complex", StringComparison.Ordinal))
             {
-                int videoStreamIndex = FindIndex(state.MediaSource.MediaStreams, state.VideoStream);
+                int videoStreamIndex = GetStreamMapIndex(state.MediaSource.MediaStreams, state.VideoStream);
 
                 args += string.Format(
                     CultureInfo.InvariantCulture,
@@ -3817,9 +4031,7 @@ namespace MediaBrowser.Controller.MediaEncoding
             var isVaapiEncoder = vidEncoder.Contains("vaapi", StringComparison.OrdinalIgnoreCase);
             var isV4l2Encoder = vidEncoder.Contains("h264_v4l2m2m", StringComparison.OrdinalIgnoreCase);
 
-            var doDeintH264 = state.DeInterlace("h264", true) || state.DeInterlace("avc", true);
-            var doDeintHevc = state.DeInterlace("h265", true) || state.DeInterlace("hevc", true);
-            var doDeintH2645 = doDeintH264 || doDeintHevc;
+            var doDeintH2645 = IsDeinterlaceAvailable(state);
             var doToneMap = IsSwTonemapAvailable(state, options);
             var requireDoviReshaping = doToneMap && state.VideoStream.VideoRangeType == VideoRangeType.DOVI;
 
@@ -3898,7 +4110,17 @@ namespace MediaBrowser.Controller.MediaEncoding
             /* Make sub and overlay filters for subtitle stream */
             var subFilters = new List<string>();
             var overlayFilters = new List<string>();
-            if (hasTextSubs)
+            if (hasSubs && ShouldBurnInSubtitleFromInputStream(state))
+            {
+                // Bitmap subtitles (e.g. DVBSUB) from the existing input demuxer ([0:N]).
+                var subW = state.SubtitleStream?.Width;
+                var subH = state.SubtitleStream?.Height;
+                var subPreProcFilters = GetGraphicalSubPreProcessFilters(swpInW, swpInH, subW, subH, reqW, reqH, reqMaxW, reqMaxH);
+                subFilters.Add(subPreProcFilters);
+                subFilters.Add("format=bgra");
+                overlayFilters.Add("overlay=eof_action=pass:repeatlast=0");
+            }
+            else if (hasTextSubs)
             {
                 // subtitles=f='*.ass':alpha=0
                 var textSubtitlesFilter = GetTextSubtitlesFilter(state, false, false);
@@ -3971,9 +4193,7 @@ namespace MediaBrowser.Controller.MediaEncoding
             var isCuInCuOut = isNvDecoder && isNvencEncoder;
 
             var doubleRateDeint = options.DeinterlaceDoubleRate && (state.VideoStream?.ReferenceFrameRate ?? 60) <= 30;
-            var doDeintH264 = state.DeInterlace("h264", true) || state.DeInterlace("avc", true);
-            var doDeintHevc = state.DeInterlace("h265", true) || state.DeInterlace("hevc", true);
-            var doDeintH2645 = doDeintH264 || doDeintHevc;
+            var doDeintH2645 = IsDeinterlaceAvailable(state);
             var doCuTonemap = IsHwTonemapAvailable(state, options);
 
             var hasSubs = state.SubtitleStream is not null && ShouldEncodeSubtitle(state);
@@ -4182,9 +4402,7 @@ namespace MediaBrowser.Controller.MediaEncoding
             var isMjpegEncoder = vidEncoder.Contains("mjpeg", StringComparison.OrdinalIgnoreCase);
             var isDxInDxOut = isD3d11vaDecoder && isAmfEncoder;
 
-            var doDeintH264 = state.DeInterlace("h264", true) || state.DeInterlace("avc", true);
-            var doDeintHevc = state.DeInterlace("h265", true) || state.DeInterlace("hevc", true);
-            var doDeintH2645 = doDeintH264 || doDeintHevc;
+            var doDeintH2645 = IsDeinterlaceAvailable(state);
             var doOclTonemap = IsHwTonemapAvailable(state, options);
 
             var hasSubs = state.SubtitleStream is not null && ShouldEncodeSubtitle(state);
@@ -4430,9 +4648,7 @@ namespace MediaBrowser.Controller.MediaEncoding
             var isMjpegEncoder = vidEncoder.Contains("mjpeg", StringComparison.OrdinalIgnoreCase);
             var isQsvInQsvOut = isHwDecoder && isQsvEncoder;
 
-            var doDeintH264 = state.DeInterlace("h264", true) || state.DeInterlace("avc", true);
-            var doDeintHevc = state.DeInterlace("h265", true) || state.DeInterlace("hevc", true);
-            var doDeintH2645 = doDeintH264 || doDeintHevc;
+            var doDeintH2645 = IsDeinterlaceAvailable(state);
             var doVppTonemap = IsIntelVppTonemapAvailable(state, options);
             var doOclTonemap = !doVppTonemap && IsHwTonemapAvailable(state, options);
             var doTonemap = doVppTonemap || doOclTonemap;
@@ -4724,12 +4940,10 @@ namespace MediaBrowser.Controller.MediaEncoding
             var isMjpegEncoder = vidEncoder.Contains("mjpeg", StringComparison.OrdinalIgnoreCase);
             var isQsvInQsvOut = isHwDecoder && isQsvEncoder;
 
-            var doDeintH264 = state.DeInterlace("h264", true) || state.DeInterlace("avc", true);
-            var doDeintHevc = state.DeInterlace("h265", true) || state.DeInterlace("hevc", true);
             var doVaVppTonemap = IsIntelVppTonemapAvailable(state, options);
             var doOclTonemap = !doVaVppTonemap && IsHwTonemapAvailable(state, options);
             var doTonemap = doVaVppTonemap || doOclTonemap;
-            var doDeintH2645 = doDeintH264 || doDeintHevc;
+            var doDeintH2645 = IsDeinterlaceAvailable(state);
 
             var hasSubs = state.SubtitleStream is not null && ShouldEncodeSubtitle(state);
             var hasTextSubs = hasSubs && state.SubtitleStream.IsTextSubtitleStream;
@@ -5055,12 +5269,10 @@ namespace MediaBrowser.Controller.MediaEncoding
             var isMjpegEncoder = vidEncoder.Contains("mjpeg", StringComparison.OrdinalIgnoreCase);
             var isVaInVaOut = isVaapiDecoder && isVaapiEncoder;
 
-            var doDeintH264 = state.DeInterlace("h264", true) || state.DeInterlace("avc", true);
-            var doDeintHevc = state.DeInterlace("h265", true) || state.DeInterlace("hevc", true);
             var doVaVppTonemap = isVaapiDecoder && IsIntelVppTonemapAvailable(state, options);
             var doOclTonemap = !doVaVppTonemap && IsHwTonemapAvailable(state, options);
             var doTonemap = doVaVppTonemap || doOclTonemap;
-            var doDeintH2645 = doDeintH264 || doDeintHevc;
+            var doDeintH2645 = IsDeinterlaceAvailable(state);
 
             var hasSubs = state.SubtitleStream is not null && ShouldEncodeSubtitle(state);
             var hasTextSubs = hasSubs && state.SubtitleStream.IsTextSubtitleStream;
@@ -5292,10 +5504,8 @@ namespace MediaBrowser.Controller.MediaEncoding
             var isSwEncoder = !isVaapiEncoder;
             var isMjpegEncoder = vidEncoder.Contains("mjpeg", StringComparison.OrdinalIgnoreCase);
 
-            var doDeintH264 = state.DeInterlace("h264", true) || state.DeInterlace("avc", true);
-            var doDeintHevc = state.DeInterlace("h265", true) || state.DeInterlace("hevc", true);
             var doVkTonemap = IsVulkanHwTonemapAvailable(state, options);
-            var doDeintH2645 = doDeintH264 || doDeintHevc;
+            var doDeintH2645 = IsDeinterlaceAvailable(state);
 
             var hasSubs = state.SubtitleStream is not null && ShouldEncodeSubtitle(state);
             var hasTextSubs = hasSubs && state.SubtitleStream.IsTextSubtitleStream;
@@ -5532,9 +5742,7 @@ namespace MediaBrowser.Controller.MediaEncoding
             var isi965Driver = _mediaEncoder.IsVaapiDeviceInteli965;
             var isAmdDriver = _mediaEncoder.IsVaapiDeviceAmd;
 
-            var doDeintH264 = state.DeInterlace("h264", true) || state.DeInterlace("avc", true);
-            var doDeintHevc = state.DeInterlace("h265", true) || state.DeInterlace("hevc", true);
-            var doDeintH2645 = doDeintH264 || doDeintHevc;
+            var doDeintH2645 = IsDeinterlaceAvailable(state);
             var doOclTonemap = IsHwTonemapAvailable(state, options);
 
             var hasSubs = state.SubtitleStream is not null && ShouldEncodeSubtitle(state);
@@ -5765,9 +5973,7 @@ namespace MediaBrowser.Controller.MediaEncoding
             var reqMaxH = state.BaseRequest.MaxHeight;
             var threeDFormat = state.MediaSource.Video3DFormat;
 
-            var doDeintH264 = state.DeInterlace("h264", true) || state.DeInterlace("avc", true);
-            var doDeintHevc = state.DeInterlace("h265", true) || state.DeInterlace("hevc", true);
-            var doDeintH2645 = doDeintH264 || doDeintHevc;
+            var doDeintH2645 = IsDeinterlaceAvailable(state);
             var doVtTonemap = IsVideoToolboxTonemapAvailable(state, options);
             var doMetalTonemap = !doVtTonemap && IsHwTonemapAvailable(state, options);
             var usingHwSurface = isVtDecoder && (_mediaEncoder.EncoderVersion >= _minFFmpegWorkingVtHwSurface);
@@ -5966,9 +6172,7 @@ namespace MediaBrowser.Controller.MediaEncoding
                 && (vidEncoder.Contains("h264", StringComparison.OrdinalIgnoreCase)
                     || vidEncoder.Contains("hevc", StringComparison.OrdinalIgnoreCase));
 
-            var doDeintH264 = state.DeInterlace("h264", true) || state.DeInterlace("avc", true);
-            var doDeintHevc = state.DeInterlace("h265", true) || state.DeInterlace("hevc", true);
-            var doDeintH2645 = doDeintH264 || doDeintHevc;
+            var doDeintH2645 = IsDeinterlaceAvailable(state);
             var doOclTonemap = IsHwTonemapAvailable(state, options);
 
             var hasSubs = state.SubtitleStream is not null && ShouldEncodeSubtitle(state);
@@ -6211,6 +6415,7 @@ namespace MediaBrowser.Controller.MediaEncoding
             var hasSubs = state.SubtitleStream is not null && ShouldEncodeSubtitle(state);
             var hasTextSubs = hasSubs && state.SubtitleStream.IsTextSubtitleStream;
             var hasGraphicalSubs = hasSubs && !state.SubtitleStream.IsTextSubtitleStream;
+            var burnInFromInputStream = ShouldBurnInSubtitleFromInputStream(state);
 
             List<string> mainFilters;
             List<string> subFilters;
@@ -6232,12 +6437,25 @@ namespace MediaBrowser.Controller.MediaEncoding
             overlayFilters?.RemoveAll(string.IsNullOrEmpty);
 
             var framerate = GetFramerateParam(state);
-            if (framerate.HasValue)
+            // CPU fps before hw scale/overlay filters forces a GPU download on every platform.
+            // Output frame rate is already enforced via the encoder -r argument.
+            var skipFpsFilter = framerate.HasValue
+                && UsesHardwareVideoFilters(mainFilters ?? [], overlayFilters ?? []);
+            if (mainFilters is not null && framerate.HasValue && !skipFpsFilter)
             {
-                mainFilters.Insert(0, string.Format(
-                    CultureInfo.InvariantCulture,
-                    "fps={0}",
-                    framerate.Value));
+                var doDeintH2645 = IsDeinterlaceAvailable(state);
+                var fpsFilter = string.Format(CultureInfo.InvariantCulture, "fps={0}", framerate.Value);
+
+                // For filter chain containing the deinterlace filter,
+                // place the fps filter at the end to preserve temporal info.
+                if (doDeintH2645)
+                {
+                    mainFilters.Add(fpsFilter);
+                }
+                else
+                {
+                    mainFilters.Insert(0, fpsFilter);
+                }
             }
 
             var mainStr = string.Empty;
@@ -6271,8 +6489,8 @@ namespace MediaBrowser.Controller.MediaEncoding
                         string.Join(',', overlayFilters));
 
                 var mapPrefix = Convert.ToInt32(state.SubtitleStream.IsExternal);
-                var subtitleStreamIndex = FindIndex(state.MediaSource.MediaStreams, state.SubtitleStream);
-                var videoStreamIndex = FindIndex(state.MediaSource.MediaStreams, state.VideoStream);
+                var subtitleStreamIndex = GetStreamMapIndex(state.MediaSource.MediaStreams, state.SubtitleStream);
+                var videoStreamIndex = GetStreamMapIndex(state.MediaSource.MediaStreams, state.VideoStream);
 
                 if (hasSubs)
                 {
@@ -6281,7 +6499,7 @@ namespace MediaBrowser.Controller.MediaEncoding
                         ? " -filter_complex \"[{0}:{1}]{4}[sub];[0:{2}][sub]{5}\""
                         : " -filter_complex \"[{0}:{1}]{4}[sub];[0:{2}]{3}[main];[main][sub]{5}\"";
 
-                    if (hasTextSubs)
+                    if (hasTextSubs && !burnInFromInputStream)
                     {
                         filterStr = string.IsNullOrEmpty(mainStr)
                             ? " -filter_complex \"{4}[sub];[0:{2}][sub]{5}\""
@@ -7188,20 +7406,37 @@ namespace MediaBrowser.Controller.MediaEncoding
                 && !IsCopyCodec(state.OutputVideoCodec)
                 && options.HlsAudioSeekStrategy is HlsAudioSeekStrategy.TranscodeAudio;
 
-            if (state.AudioStream is not null
-                && CanStreamCopyAudio(state, state.AudioStream, state.SupportedAudioCodecs)
-                && !preventHlsAudioCopy)
+            if (ShouldUseLiveBroadcastAudioCopy(state)
+                && state.AudioStream is not null
+                && CanStreamCopyAudio(state, state.AudioStream, state.SupportedAudioCodecs))
             {
                 state.OutputAudioCodec = "copy";
             }
             else
             {
-                var user = state.User;
-
-                // If the user doesn't have access to transcoding, then force stream copy, regardless of whether it will be compatible or not
-                if (user is not null && !user.HasPermission(PermissionKind.EnableAudioPlaybackTranscoding))
+                TranscodeReason audioCopyFailureReasons = 0;
+                if (state.AudioStream is not null
+                    && CanStreamCopyAudio(state, state.AudioStream, state.SupportedAudioCodecs, out audioCopyFailureReasons)
+                    && !preventHlsAudioCopy)
                 {
                     state.OutputAudioCodec = "copy";
+                }
+                else
+                {
+                    var user = state.User;
+
+                    // If the user doesn't have access to transcoding, then force stream copy, regardless of whether it will be compatible or not
+                    if (user is not null && !user.HasPermission(PermissionKind.EnableAudioPlaybackTranscoding))
+                    {
+                        state.OutputAudioCodec = "copy";
+                    }
+                    else if (state.AudioStream is not null && !IsCopyCodec(state.OutputAudioCodec))
+                    {
+                        // Audio is actually being re-encoded although the playback determination may have considered the source copyable.
+                        // Only carry the primary "cannot be passed through" cause - the codec mismatch.
+                        // Bitrate/channels/sample-rate/bit-depth copy refusals are consequences of the chosen transcode target.
+                        state.AddTranscodeReason(audioCopyFailureReasons & TranscodeReason.AudioCodecNotSupported);
+                    }
                 }
             }
         }
@@ -7822,13 +8057,14 @@ namespace MediaBrowser.Controller.MediaEncoding
                 audioTranscodeParams.Add("-ar " + state.BaseRequest.AudioBitRate);
             }
 
-            if (!string.Equals(outputCodec, "opus", StringComparison.OrdinalIgnoreCase))
+            var sampleRate = state.OutputAudioSampleRate;
+            if (sampleRate.HasValue)
             {
-                // opus only supports specific sampling rates
-                var sampleRate = state.OutputAudioSampleRate;
-                if (sampleRate.HasValue)
+                var sampleRateValue = sampleRate.Value;
+                if (string.Equals(outputCodec, "opus", StringComparison.OrdinalIgnoreCase))
                 {
-                    var sampleRateValue = sampleRate.Value switch
+                    // opus only supports specific sampling rates
+                    sampleRateValue = sampleRate.Value switch
                     {
                         <= 8000 => 8000,
                         <= 12000 => 12000,
@@ -7836,9 +8072,9 @@ namespace MediaBrowser.Controller.MediaEncoding
                         <= 24000 => 24000,
                         _ => 48000
                     };
-
-                    audioTranscodeParams.Add("-ar " + sampleRateValue.ToString(CultureInfo.InvariantCulture));
                 }
+
+                audioTranscodeParams.Add("-ar " + sampleRateValue.ToString(CultureInfo.InvariantCulture));
             }
 
             // Copy the movflags from GetProgressiveVideoFullCommandLine
@@ -7888,6 +8124,57 @@ namespace MediaBrowser.Controller.MediaEncoding
             return -1;
         }
 
+        private static int GetStreamMapIndex(IReadOnlyList<MediaStream> mediaStreams, MediaStream stream)
+        {
+            // External streams are listed in MediaStreams but come from separate ffmpeg inputs.
+            // Jellyfin stream indices then no longer match in-file indices for the main video.
+            if (mediaStreams.Any(i => i.IsExternal))
+            {
+                return FindIndex(mediaStreams, stream);
+            }
+
+            if (stream.Index >= 0)
+            {
+                return stream.Index;
+            }
+
+            return FindIndex(mediaStreams, stream);
+        }
+
+        private static string GetLiveStreamMapArgs(EncodingJobInfo state)
+        {
+            var args = string.Empty;
+
+            if (state.VideoStream is not null)
+            {
+                args += "-map 0:v:0";
+            }
+            else
+            {
+                args += "-vn";
+            }
+
+            if (state.AudioStream is not null)
+            {
+                args += " -map 0:a:0";
+            }
+            else
+            {
+                args += " -map -0:a";
+            }
+
+            if (state.SubtitleStream is null || state.SubtitleDeliveryMethod == SubtitleDeliveryMethod.Hls)
+            {
+                args += " -map -0:s";
+            }
+            else if (state.SubtitleDeliveryMethod == SubtitleDeliveryMethod.Embed)
+            {
+                args += " -map 0:s:0";
+            }
+
+            return args;
+        }
+
         public static bool IsCopyCodec(string codec)
         {
             return string.Equals(codec, "copy", StringComparison.OrdinalIgnoreCase);
@@ -7895,8 +8182,120 @@ namespace MediaBrowser.Controller.MediaEncoding
 
         private static bool ShouldEncodeSubtitle(EncodingJobInfo state)
         {
-            return state.SubtitleDeliveryMethod == SubtitleDeliveryMethod.Encode
+            var encode = state.SubtitleDeliveryMethod == SubtitleDeliveryMethod.Encode
                    || (state.BaseRequest.AlwaysBurnInSubtitleWhenTranscoding && !IsCopyCodec(state.OutputVideoCodec));
+
+            if (!encode)
+            {
+                return false;
+            }
+
+            // Live DVB teletext burn-in renders full teletext pages (e.g. sports tables), not captions.
+            if (state.MediaSource?.IsInfiniteStream == true
+                && state.SubtitleStream is { IsExternal: false }
+                && MediaStream.IsTeletextFormat(state.SubtitleStream.Codec ?? string.Empty))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// DVB-T/T2 often carries MP2 in MPEG-TS. When video is transcoded (e.g. DVBSUB burn-in),
+        /// ffmpeg may mis-identify the audio PID as an empty mp3 at transcode time; packet-copy avoids that decode path.
+        /// </summary>
+        private static bool ShouldUseLiveBroadcastAudioCopy(EncodingJobInfo state)
+        {
+            if (state.MediaSource?.IsInfiniteStream != true
+                || state.TranscodingType != TranscodingJobType.Hls
+                || state.AudioStream is null)
+            {
+                return false;
+            }
+
+            var codec = state.AudioStream.Codec ?? string.Empty;
+            if (!string.Equals(codec, "mp2", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(codec, "mpa", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(codec, "mpeg", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (state.AudioStream.Channels.HasValue && state.AudioStream.Channels.Value <= 0)
+            {
+                return false;
+            }
+
+            // DVBSUB burn-in forces a video transcode even when TryStreamCopy initially chose stream copy.
+            var videoTranscodeRequired = !IsCopyCodec(state.OutputVideoCodec)
+                || (state.SubtitleStream is not null && state.SubtitleDeliveryMethod == SubtitleDeliveryMethod.Encode);
+
+            return videoTranscodeRequired;
+        }
+
+        /// <summary>
+        /// Live TV bitmap subtitles (e.g. DVBSUB) must be decoded from the existing input
+        /// demuxer. Re-opening the live URL or overlaying teletext streams is not supported.
+        /// When hardware acceleration is enabled these are treated as graphical subtitles and
+        /// use the same GPU overlay filters as other bitmap subs (overlay_cuda, overlay_vaapi,
+        /// overlay_qsv, overlay_videotoolbox, overlay_rkrga, etc.).
+        /// </summary>
+        private static bool ShouldBurnInSubtitleFromInputStream(EncodingJobInfo state)
+        {
+            return state.MediaSource?.IsInfiniteStream == true
+                   && state.SubtitleStream is { IsExternal: false, IsTextSubtitleStream: false }
+                   && ShouldEncodeSubtitle(state);
+        }
+
+        private static bool UsesHardwareVideoFilters(IReadOnlyList<string> mainFilters, IReadOnlyList<string> overlayFilters)
+        {
+            foreach (var filter in mainFilters)
+            {
+                if (IsHardwareVideoFilter(filter))
+                {
+                    return true;
+                }
+            }
+
+            foreach (var filter in overlayFilters)
+            {
+                if (IsHardwareVideoFilter(filter))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsHardwareVideoFilter(string filter)
+        {
+            if (string.IsNullOrEmpty(filter))
+            {
+                return false;
+            }
+
+            ReadOnlySpan<string> hwFilterTokens =
+            [
+                "scale_cuda", "scale_vaapi", "scale_vt", "scale_qsv", "vpp_qsv",
+                "scale_rkrga", "vpp_rkrga", "scale_opencl", "scale_vulkan",
+                "overlay_cuda", "overlay_vaapi", "overlay_qsv", "overlay_videotoolbox",
+                "overlay_rkrga", "overlay_opencl", "overlay_vulkan",
+                "yadif_cuda", "yadif_videotoolbox", "deinterlace_vaapi",
+                "transpose_cuda", "transpose_vt", "transpose_vaapi",
+                "tonemap_cuda", "tonemap_vaapi", "tonemap_videotoolbox",
+            ];
+
+            foreach (var token in hwFilterTokens)
+            {
+                if (filter.Contains(token, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static bool NeedsExternalSubtitleMuxing(EncodingJobInfo state)
