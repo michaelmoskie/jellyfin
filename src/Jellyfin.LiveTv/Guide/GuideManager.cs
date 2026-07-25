@@ -336,6 +336,7 @@ public class GuideManager : IGuideManager
 
     private void CleanDatabase(Guid[] currentIdList, BaseItemKind[] validTypes, IProgress<double> progress, CancellationToken cancellationToken)
     {
+        var currentIds = new HashSet<Guid>(currentIdList);
         var list = _itemRepo.GetItemIdsList(new InternalItemsQuery
         {
             IncludeItemTypes = validTypes,
@@ -354,7 +355,7 @@ public class GuideManager : IGuideManager
                 continue;
             }
 
-            if (!currentIdList.Contains(itemId))
+            if (!currentIds.Contains(itemId))
             {
                 var item = _libraryManager.GetItemById(itemId);
 
