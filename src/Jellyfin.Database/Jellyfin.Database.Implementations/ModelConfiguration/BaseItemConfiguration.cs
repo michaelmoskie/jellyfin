@@ -48,6 +48,8 @@ public class BaseItemConfiguration : IEntityTypeConfiguration<BaseItemEntity>
         builder.HasIndex(e => new { e.Type, e.SeriesPresentationUniqueKey, e.IsFolder, e.IsVirtualItem });
         // live tv programs
         builder.HasIndex(e => new { e.Type, e.TopParentId, e.StartDate });
+        // live tv guide refresh: per-channel program reconciliation
+        builder.HasIndex(e => new { e.Type, e.ChannelId, e.StartDate });
         // covering index for getitemvalues
         builder.HasIndex(e => new { e.Type, e.TopParentId, e.Id });
         // used by movie suggestions
