@@ -1,0 +1,19 @@
+services:
+  jellyfin-local:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+      args:
+        JELLYFIN_UID: ${UID:-10001}
+        JELLYFIN_GID: ${GID:-10001}
+    image: michaelmoskie/jellyfin:guide-p0-local
+    container_name: jellyfin-guide-p0
+    user: "${UID:-10001}:${GID:-10001}"
+    ports:
+      - "8096:8096"
+      - "8920:8920"
+    volumes:
+      - ./run/config:/config
+      - ./run/cache:/cache
+      - ./run/media:/media
+    restart: unless-stopped
