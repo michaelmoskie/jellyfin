@@ -18,7 +18,11 @@ input; its browser player is not used.
 
 Create a Dispatcharr API key for a Standard or Admin user. The user and
 Dispatcharr network-access rules determine which API data Jellyfin may read.
-Add a tuner host with the following fields:
+In Jellyfin, open **Dashboard → Live TV**, add a tuner device, and select
+**Dispatcharr**. Enter the Dispatcharr URL and API key. The optional channel
+profile ID limits the import to enabled members of that profile.
+
+The equivalent server configuration is:
 
 ```json
 {

@@ -1,0 +1,83 @@
+diff --git a/src/apps/dashboard/controllers/livetvtuner.html b/src/apps/dashboard/controllers/livetvtuner.html
+index 6cdf147..97276f5 100644
+--- a/src/apps/dashboard/controllers/livetvtuner.html
++++ b/src/apps/dashboard/controllers/livetvtuner.html
+@@ -34,0 +35,10 @@ <h1 class="sectionTitle">${HeaderLiveTvTunerSetup}</h1>
++                <div class="inputContainer fldDispatcharrApiKey hide">
++                    <input is="emby-input" type="password" class="txtDispatcharrApiKey" label="${LabelDispatcharrApiKey}" autocomplete="new-password" />
++                    <div class="fieldDescription">${DispatcharrApiKeyHelp}</div>
++                </div>
++
++                <div class="inputContainer fldDispatcharrChannelProfileId hide">
++                    <input is="emby-input" type="number" pattern="[0-9]*" min="1" step="1" class="txtDispatcharrChannelProfileId" label="${LabelDispatcharrChannelProfileId}" autocomplete="off" />
++                    <div class="fieldDescription">${DispatcharrChannelProfileIdHelp}</div>
++                </div>
++
+diff --git a/src/apps/dashboard/controllers/livetvtuner.js b/src/apps/dashboard/controllers/livetvtuner.js
+index c9bafdc..138b6a2 100644
+--- a/src/apps/dashboard/controllers/livetvtuner.js
++++ b/src/apps/dashboard/controllers/livetvtuner.js
+@@ -69,0 +70,2 @@ function fillTunerHostInfo(view, info) {
++    view.querySelector('.txtDispatcharrApiKey').value = info.ApiKey || '';
++    view.querySelector('.txtDispatcharrChannelProfileId').value = info.ChannelProfileId || '';
+@@ -90,0 +93,6 @@ function submitForm(page) {
++    if (info.Type === 'dispatcharr') {
++        const channelProfileId = page.querySelector('.txtDispatcharrChannelProfileId').value;
++        info.ApiKey = page.querySelector('.txtDispatcharrApiKey').value || null;
++        info.ChannelProfileId = channelProfileId ? parseInt(channelProfileId, 10) : null;
++    }
++
+@@ -131 +139,2 @@ function onTypeChange() {
+-    const supportsTunerFileOrUrl = value === 'm3u';
++    const supportsDispatcharr = value === 'dispatcharr';
++    const supportsTunerFileOrUrl = value === 'm3u' || supportsDispatcharr;
+@@ -141 +150 @@ function onTypeChange() {
+-    const supportsSelectablePath = supportsTunerFileOrUrl;
++    const supportsSelectablePath = value === 'm3u';
+@@ -146,0 +156,3 @@ function onTypeChange() {
++    } else if (supportsDispatcharr) {
++        txtDevicePath.label(globalize.translate('LabelDispatcharrUrl'));
++        view.querySelector('.fldPath').classList.remove('hide');
+@@ -156 +167,0 @@ function onTypeChange() {
+-        view.querySelector('.txtDevicePath').setAttribute('required', 'required');
+@@ -158,0 +170,5 @@ function onTypeChange() {
++    }
++
++    if (supportsTunerFileOrUrl) {
++        view.querySelector('.txtDevicePath').setAttribute('required', 'required');
++    } else {
+@@ -161,0 +178,8 @@ function onTypeChange() {
++    view.querySelector('.fldDispatcharrApiKey').classList.toggle('hide', !supportsDispatcharr);
++    view.querySelector('.fldDispatcharrChannelProfileId').classList.toggle('hide', !supportsDispatcharr);
++    if (supportsDispatcharr) {
++        view.querySelector('.txtDispatcharrApiKey').setAttribute('required', 'required');
++    } else {
++        view.querySelector('.txtDispatcharrApiKey').removeAttribute('required');
++    }
++
+diff --git a/src/apps/dashboard/features/livetv/utils/getTunerName.ts b/src/apps/dashboard/features/livetv/utils/getTunerName.ts
+index ea43ce8..a4e089b 100644
+--- a/src/apps/dashboard/features/livetv/utils/getTunerName.ts
++++ b/src/apps/dashboard/features/livetv/utils/getTunerName.ts
+@@ -6,0 +7,2 @@ const getTunerName = (providerId: string | null | undefined) => {
++        case 'dispatcharr':
++            return 'Dispatcharr';
+diff --git a/src/components/tunerPicker.js b/src/components/tunerPicker.js
+index 3a455d9..bbdeedf 100644
+--- a/src/components/tunerPicker.js
++++ b/src/components/tunerPicker.js
+@@ -76,0 +77,3 @@ function getTunerName(providerId) {
++        case 'dispatcharr':
++            return 'Dispatcharr';
++
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+index 693468f..f1d3b2a 100755
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -273,0 +274,2 @@
++    "DispatcharrApiKeyHelp": "API key for a Dispatcharr Standard or Admin user.",
++    "DispatcharrChannelProfileIdHelp": "Optional numeric channel profile to import. Leave blank to import all channels.",
+@@ -717,0 +720,3 @@
++    "LabelDispatcharrApiKey": "Dispatcharr API key",
++    "LabelDispatcharrChannelProfileId": "Dispatcharr channel profile ID",
++    "LabelDispatcharrUrl": "Dispatcharr URL",
