@@ -46,5 +46,15 @@ namespace MediaBrowser.Model.LiveTv
         public bool IgnoreDts { get; set; }
 
         public bool ReadAtNativeFramerate { get; set; }
+
+        /// <summary>
+        /// Gets or sets an API key used to authenticate with the tuner host.
+        /// </summary>
+        public string ApiKey { get; set; }
+
+        /// <summary>
+        /// Gets or sets the optional Dispatcharr channel profile identifier.
+        /// </summary>
+        public int? ChannelProfileId { get; set; }
     }
 }
