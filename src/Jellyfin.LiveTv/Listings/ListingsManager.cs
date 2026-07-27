@@ -124,6 +124,18 @@ public class ListingsManager : IListingsManager
     {
         ArgumentNullException.ThrowIfNull(channel);
 
+        foreach (var provider in _tunerHostManager.TunerHosts.OfType<ITunerHostListingsProvider>())
+        {
+            if (!provider.Supports(channel))
+            {
+                continue;
+            }
+
+            return await provider
+                .GetProgramsAsync(channel, startDateUtc, endDateUtc, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         foreach (var (provider, providerInfo) in GetListingProviders())
         {
             if (!IsListingProviderEnabledForTuner(providerInfo, channel.TunerHostId))

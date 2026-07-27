@@ -336,6 +336,7 @@ public class GuideManager : IGuideManager
 
     private void CleanDatabase(Guid[] currentIdList, BaseItemKind[] validTypes, IProgress<double> progress, CancellationToken cancellationToken)
     {
+        var currentIds = new HashSet<Guid>(currentIdList);
         var list = _itemRepo.GetItemIdsList(new InternalItemsQuery
         {
             IncludeItemTypes = validTypes,
@@ -354,7 +355,7 @@ public class GuideManager : IGuideManager
                 continue;
             }
 
-            if (!currentIdList.Contains(itemId))
+            if (!currentIds.Contains(itemId))
             {
                 var item = _libraryManager.GetItemById(itemId);
 
@@ -488,9 +489,10 @@ public class GuideManager : IGuideManager
                 DateModified = DateTime.UtcNow
             };
         }
-        else if (XmlTvProgramEtag.MatchesStored(info.Etag, item.GetProviderId(EtagKey)))
+        else if (XmlTvProgramEtag.MatchesStored(info.Etag, item.GetProviderId(EtagKey))
+                 || DispatcharrProgramEtag.MatchesStored(info.Etag, item.GetProviderId(EtagKey)))
         {
-            // XMLTV ETags are generated from the final ProgramInfo fields Jellyfin consumes,
+            // Native ETags are generated from the final ProgramInfo fields Jellyfin consumes,
             // so an exact match means nothing relevant changed. Other providers stay on the
             // field-by-field update path.
             return (item, false, false);

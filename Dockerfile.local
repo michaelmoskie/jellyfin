@@ -1,0 +1,83 @@
+# syntax=docker/dockerfile:1
+
+ARG DOTNET_VERSION=10.0
+ARG NODE_VERSION=24-bookworm
+
+FROM node:${NODE_VERSION} AS web-build
+
+WORKDIR /src
+RUN git clone --depth 1 https://github.com/jellyfin/jellyfin-web.git jellyfin-web
+
+WORKDIR /src/jellyfin-web
+RUN npm install
+RUN npm run build:development
+
+
+FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS server-build
+
+WORKDIR /src
+
+COPY . .
+
+RUN dotnet restore Jellyfin.Server/Jellyfin.Server.csproj
+RUN dotnet publish Jellyfin.Server/Jellyfin.Server.csproj \
+    --configuration Release \
+    --output /app/jellyfin \
+    --no-restore
+
+
+FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS runtime
+
+ARG JELLYFIN_UID=10001
+ARG JELLYFIN_GID=10001
+
+ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=false
+ENV JELLYFIN_DATA_DIR=/config
+ENV JELLYFIN_CACHE_DIR=/cache
+ENV JELLYFIN_CONFIG_DIR=/config/config
+ENV JELLYFIN_LOG_DIR=/config/log
+ENV JELLYFIN_WEB_DIR=/usr/share/jellyfin/web
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        ca-certificates \
+        curl \
+        icu-devtools \
+        libfontconfig1 \
+        libfreetype6 \
+        libssl3t64 \
+        libstdc++6 \
+        libva2 \
+        libva-drm2 \
+        libva-x11-2 \
+        libvdpau1 \
+        libx11-6 \
+        libxext6 \
+        libxrandr2 \
+        zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --system --gid "${JELLYFIN_GID}" jellyfin \
+    && useradd --system \
+        --uid "${JELLYFIN_UID}" \
+        --gid jellyfin \
+        --create-home \
+        --home-dir /jellyfin \
+        jellyfin \
+    && mkdir -p /config /cache /media /usr/share/jellyfin/web \
+    && chown -R jellyfin:jellyfin /config /cache /media /jellyfin
+
+COPY --from=server-build /app/jellyfin /app/jellyfin
+COPY --from=web-build /src/jellyfin-web/dist /usr/share/jellyfin/web
+
+RUN chown -R jellyfin:jellyfin /app/jellyfin /usr/share/jellyfin/web
+
+USER jellyfin
+
+EXPOSE 8096 8920
+
+VOLUME ["/config", "/cache", "/media"]
+
+ENTRYPOINT ["/app/jellyfin/jellyfin"]
+CMD ["--datadir", "/config", "--configdir", "/config/config", "--cachedir", "/cache", "--logdir", "/config/log", "--webdir", "/usr/share/jellyfin/web", "--ffmpeg", "/usr/bin/ffmpeg"]

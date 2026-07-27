@@ -129,7 +129,7 @@ namespace Jellyfin.LiveTv.TunerHosts
             return new LiveStream(mediaSource, tunerHost, FileSystem, Logger, Config, _streamHelper);
         }
 
-        public async Task Validate(TunerHostInfo info)
+        public virtual async Task Validate(TunerHostInfo info)
         {
             using (await new M3uParser(Logger, _httpClientFactory).GetListingsStream(info, CancellationToken.None).ConfigureAwait(false))
             {

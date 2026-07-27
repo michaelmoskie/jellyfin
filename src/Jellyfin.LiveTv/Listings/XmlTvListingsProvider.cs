@@ -9,6 +9,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml;
 using Jellyfin.Extensions;
 using Jellyfin.XmlTv;
 using Jellyfin.XmlTv.Entities;
@@ -31,6 +32,8 @@ namespace Jellyfin.LiveTv.Listings
         private readonly IServerConfigurationManager _config;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly ILogger<XmlTvListingsProvider> _logger;
+        private readonly Lock _programCacheLock = new();
+        private XmlTvProgramCache? _programCache;
 
         public XmlTvListingsProvider(
             IServerConfigurationManager config,
@@ -169,11 +172,88 @@ namespace Jellyfin.LiveTv.Listings
             _logger.LogDebug("Getting xmltv programs for channel {Id}", channelId);
 
             string path = await GetXml(info, cancellationToken).ConfigureAwait(false);
-            _logger.LogDebug("Opening XmlTvReader for {Path}", path);
-            var reader = new XmlTvReader(path, GetLanguage(info));
+            var programmesByChannel = GetProgrammesByChannel(path, GetLanguage(info), startDateUtc, endDateUtc, cancellationToken);
 
-            return reader.GetProgrammes(channelId, startDateUtc, endDateUtc, cancellationToken)
-                        .Select(p => GetProgramInfoWithEtag(p, info));
+            return programmesByChannel.TryGetValue(channelId, out var programs)
+                ? programs.Select(p => GetProgramInfoWithEtag(p, info))
+                : Enumerable.Empty<ProgramInfo>();
+        }
+
+        private IReadOnlyDictionary<string, IReadOnlyList<XmlTvProgram>> GetProgrammesByChannel(
+            string path,
+            string language,
+            DateTime startDateUtc,
+            DateTime endDateUtc,
+            CancellationToken cancellationToken)
+        {
+            var lastWriteTimeUtc = File.GetLastWriteTimeUtc(path);
+
+            lock (_programCacheLock)
+            {
+                if (_programCache?.Matches(path, lastWriteTimeUtc, language, startDateUtc, endDateUtc) == true)
+                {
+                    return _programCache.ProgrammesByChannel;
+                }
+
+                _logger.LogDebug("Opening XmlTvReader for {Path}", path);
+                var programmesByChannel = ReadProgrammesByChannel(path, language, startDateUtc, endDateUtc, cancellationToken);
+                _programCache = new XmlTvProgramCache(path, lastWriteTimeUtc, language, startDateUtc, endDateUtc, programmesByChannel);
+
+                return programmesByChannel;
+            }
+        }
+
+        private static IReadOnlyDictionary<string, IReadOnlyList<XmlTvProgram>> ReadProgrammesByChannel(
+            string path,
+            string language,
+            DateTime startDateUtc,
+            DateTime endDateUtc,
+            CancellationToken cancellationToken)
+        {
+            var programmesByChannel = new Dictionary<string, List<XmlTvProgram>>(StringComparer.OrdinalIgnoreCase);
+            var xmlTvReader = new XmlTvReader(path, language);
+
+            var settings = new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Ignore,
+                CheckCharacters = false,
+                IgnoreProcessingInstructions = true,
+                IgnoreComments = true
+            };
+
+            using var reader = XmlReader.Create(path, settings);
+            if (!reader.ReadToDescendant("tv") || !reader.ReadToDescendant("programme"))
+            {
+                return programmesByChannel.ToDictionary(i => i.Key, i => (IReadOnlyList<XmlTvProgram>)i.Value, StringComparer.OrdinalIgnoreCase);
+            }
+
+            do
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var channelId = reader.GetAttribute("channel");
+                if (string.IsNullOrWhiteSpace(channelId))
+                {
+                    continue;
+                }
+
+                var programme = xmlTvReader.GetProgramme(reader, channelId, startDateUtc, endDateUtc);
+                if (programme is null)
+                {
+                    continue;
+                }
+
+                if (!programmesByChannel.TryGetValue(channelId, out var programmes))
+                {
+                    programmes = new List<XmlTvProgram>();
+                    programmesByChannel[channelId] = programmes;
+                }
+
+                programmes.Add(programme);
+            }
+            while (reader.ReadToFollowing("programme"));
+
+            return programmesByChannel.ToDictionary(i => i.Key, i => (IReadOnlyList<XmlTvProgram>)i.Value, StringComparer.OrdinalIgnoreCase);
         }
 
         private ProgramInfo GetProgramInfoWithEtag(XmlTvProgram program, ListingsProviderInfo info)
@@ -318,6 +398,44 @@ namespace Jellyfin.LiveTv.Listings
                 ImageUrl = string.IsNullOrEmpty(c.Icons.FirstOrDefault()?.Source) ? null : c.Icons.FirstOrDefault()!.Source,
                 Number = string.IsNullOrWhiteSpace(c.Number) ? c.Id : c.Number
             }).ToList();
+        }
+
+        private sealed class XmlTvProgramCache
+        {
+            public XmlTvProgramCache(
+                string path,
+                DateTime lastWriteTimeUtc,
+                string language,
+                DateTime startDateUtc,
+                DateTime endDateUtc,
+                IReadOnlyDictionary<string, IReadOnlyList<XmlTvProgram>> programmesByChannel)
+            {
+                Path = path;
+                LastWriteTimeUtc = lastWriteTimeUtc;
+                Language = language;
+                StartDateUtc = startDateUtc;
+                EndDateUtc = endDateUtc;
+                ProgrammesByChannel = programmesByChannel;
+            }
+
+            public string Path { get; }
+
+            public DateTime LastWriteTimeUtc { get; }
+
+            public string Language { get; }
+
+            public DateTime StartDateUtc { get; }
+
+            public DateTime EndDateUtc { get; }
+
+            public IReadOnlyDictionary<string, IReadOnlyList<XmlTvProgram>> ProgrammesByChannel { get; }
+
+            public bool Matches(string path, DateTime lastWriteTimeUtc, string language, DateTime startDateUtc, DateTime endDateUtc)
+                => string.Equals(Path, path, StringComparison.Ordinal)
+                   && LastWriteTimeUtc == lastWriteTimeUtc
+                   && string.Equals(Language, language, StringComparison.OrdinalIgnoreCase)
+                   && StartDateUtc == startDateUtc
+                   && EndDateUtc == endDateUtc;
         }
     }
 }

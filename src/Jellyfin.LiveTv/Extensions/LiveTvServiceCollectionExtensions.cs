@@ -5,6 +5,7 @@ using Jellyfin.LiveTv.Listings;
 using Jellyfin.LiveTv.Recordings;
 using Jellyfin.LiveTv.Timers;
 using Jellyfin.LiveTv.TunerHosts;
+using Jellyfin.LiveTv.TunerHosts.Dispatcharr;
 using Jellyfin.LiveTv.TunerHosts.HdHomerun;
 using MediaBrowser.Controller.Channels;
 using MediaBrowser.Controller.LiveTv;
@@ -38,6 +39,7 @@ public static class LiveTvServiceCollectionExtensions
         services.AddSingleton<IRecordingsManager, RecordingsManager>();
 
         services.AddSingleton<ILiveTvService, DefaultLiveTvService>();
+        services.AddSingleton<ITunerHost, DispatcharrTunerHost>();
         services.AddSingleton<ITunerHost, HdHomerunHost>();
         services.AddSingleton<ITunerHost, M3UTunerHost>();
         services.AddSingleton<SchedulesDirect>();
