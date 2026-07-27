@@ -242,9 +242,11 @@ Deployment is ready:
 Dispatcharr is reachable from Jellyfin on the Compose network at:
   http://dispatcharr:9191/
 
-Complete Dispatcharr's initial setup, create an API key, then add the native
-Dispatcharr tuner in Jellyfin using the configuration documented at:
-  src/Jellyfin.LiveTv/TunerHosts/Dispatcharr/README.md
+Complete Dispatcharr's initial setup and create an API key. Then open
+Jellyfin's Dashboard → Live TV, add a tuner, and select Dispatcharr. Use:
+  URL: http://dispatcharr:9191/
+  API key: the key created in Dispatcharr
+  Channel profile ID: optional
 
 Persistent data is stored under:
   ${PROJECT_DIR}/run/

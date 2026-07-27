@@ -17,7 +17,11 @@ RUN git clone \
         "${JELLYFIN_WEB_REPOSITORY}" \
         jellyfin-web
 
+COPY deployment/jellyfin-web/dispatcharr-tuner.patch /tmp/dispatcharr-tuner.patch
+
 WORKDIR /src/jellyfin-web
+RUN git apply --unidiff-zero --check /tmp/dispatcharr-tuner.patch \
+    && git apply --unidiff-zero /tmp/dispatcharr-tuner.patch
 RUN npm ci --no-audit --no-fund
 RUN npm run build:production
 

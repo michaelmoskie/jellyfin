@@ -54,40 +54,16 @@ Complete Dispatcharr's first-run setup, create an API key for a Standard or
 Admin user, and ensure its network-access settings allow the Compose network.
 Jellyfin reaches it internally at `http://dispatcharr:9191/`.
 
-Add the native Dispatcharr tuner to Jellyfin using the fields documented in
-`src/Jellyfin.LiveTv/TunerHosts/Dispatcharr/README.md`. The current web client
-does not expose the API key and channel-profile fields in its tuner form, so
-use Jellyfin's `POST /LiveTv/TunerHosts` API:
+After completing Jellyfin's first-run wizard, open **Dashboard → Live TV**,
+add a tuner device, and select **Dispatcharr**. Enter:
 
-```json
-{
-  "Type": "dispatcharr",
-  "Url": "http://dispatcharr:9191/",
-  "ApiKey": "replace-with-the-dispatcharr-api-key",
-  "ChannelProfileId": null,
-  "TunerCount": 0,
-  "AllowStreamSharing": true
-}
-```
+- Dispatcharr URL: `http://dispatcharr:9191/`
+- Dispatcharr API key: the key created in Dispatcharr
+- Dispatcharr channel profile ID: optional; leave blank to import all channels
 
-After completing Jellyfin's first-run wizard and creating a Jellyfin API key,
-the tuner can be added from the Ubuntu host with:
-
-```bash
-curl --fail-with-body \
-  --request POST \
-  --header 'Content-Type: application/json' \
-  --header 'X-Emby-Token: REPLACE_WITH_JELLYFIN_API_KEY' \
-  --data '{
-    "Type": "dispatcharr",
-    "Url": "http://dispatcharr:9191/",
-    "ApiKey": "REPLACE_WITH_DISPATCHARR_API_KEY",
-    "ChannelProfileId": null,
-    "TunerCount": 0,
-    "AllowStreamSharing": true
-  }' \
-  http://192.168.1.X:8096/LiveTv/TunerHosts
-```
+The API key is displayed as a password field. Existing Dispatcharr tuners can
+be edited from the same page. No Jellyfin API key or manual `curl` request is
+needed.
 
 The script is safe to rerun. Use `--no-build` to restart existing images
 without recompiling Jellyfin.
