@@ -1,19 +1,46 @@
 services:
+  dispatcharr:
+    image: ghcr.io/dispatcharr/dispatcharr:${DISPATCHARR_TAG:-latest}
+    container_name: dispatcharr
+    ports:
+      - "${LAN_BIND_ADDRESS:?Run scripts/start-ubuntu-compose.sh first}:${DISPATCHARR_HTTP_PORT:-9191}:9191"
+    environment:
+      TZ: ${TIMEZONE:-Etc/UTC}
+    volumes:
+      - ./run/dispatcharr:/data
+    restart: unless-stopped
+
   jellyfin-local:
     build:
       context: .
       dockerfile: Dockerfile.local
       args:
-        JELLYFIN_UID: ${UID:-10001}
-        JELLYFIN_GID: ${GID:-10001}
+        JELLYFIN_UID: ${JELLYFIN_UID:-10001}
+        JELLYFIN_GID: ${JELLYFIN_GID:-10001}
+        JELLYFIN_WEB_REPOSITORY: ${JELLYFIN_WEB_REPOSITORY:-https://github.com/michaelmoskie/jellyfin-web.git}
+        JELLYFIN_WEB_REF: ${JELLYFIN_WEB_REF:-master}
     image: michaelmoskie/jellyfin:guide-p0-local
     container_name: jellyfin-guide-p0
-    user: "${UID:-10001}:${GID:-10001}"
+    user: "${JELLYFIN_UID:-10001}:${JELLYFIN_GID:-10001}"
+    depends_on:
+      - dispatcharr
     ports:
-      - "8096:8096"
-      - "8920:8920"
+      - "${LAN_BIND_ADDRESS:?Run scripts/start-ubuntu-compose.sh first}:${JELLYFIN_HTTP_PORT:-8096}:8096"
+      - "${LAN_BIND_ADDRESS:?Run scripts/start-ubuntu-compose.sh first}:7359:7359/udp"
+    environment:
+      TZ: ${TIMEZONE:-Etc/UTC}
     volumes:
       - ./run/config:/config
       - ./run/cache:/cache
       - ./run/media:/media
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8096/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
     restart: unless-stopped
+
+networks:
+  default:
+    name: jellyfin-dispatcharr
