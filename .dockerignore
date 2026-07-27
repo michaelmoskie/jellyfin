@@ -9,3 +9,5 @@ deployment/*/dist
 deployment/*/pkg-dist
 deployment/collect-dist/
 ci/
+run/
+.env.ubuntu

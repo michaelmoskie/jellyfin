@@ -2,15 +2,24 @@
 
 ARG DOTNET_VERSION=10.0
 ARG NODE_VERSION=24-bookworm
+ARG JELLYFIN_WEB_REPOSITORY=https://github.com/michaelmoskie/jellyfin-web.git
+ARG JELLYFIN_WEB_REF=master
 
 FROM node:${NODE_VERSION} AS web-build
 
+ARG JELLYFIN_WEB_REPOSITORY
+ARG JELLYFIN_WEB_REF
+
 WORKDIR /src
-RUN git clone --depth 1 https://github.com/jellyfin/jellyfin-web.git jellyfin-web
+RUN git clone \
+        --branch "${JELLYFIN_WEB_REF}" \
+        --depth 1 \
+        "${JELLYFIN_WEB_REPOSITORY}" \
+        jellyfin-web
 
 WORKDIR /src/jellyfin-web
-RUN npm install
-RUN npm run build:development
+RUN npm ci --no-audit --no-fund
+RUN npm run build:production
 
 
 FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS server-build
